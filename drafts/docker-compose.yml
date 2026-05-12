@@ -44,7 +44,7 @@ services:
       DATABASE_POOL_SIZE: "10"
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY}"
 
-      # LLM — SecretInference, OpenAI-compatible
+      # LLM — SecretAI, OpenAI-compatible via Ollama
       LLM_BACKEND: "openai_compatible"
       LLM_BASE_URL: "${LLM_BASE_URL}"
       LLM_API_KEY: "${LLM_API_KEY}"

@@ -9,9 +9,9 @@
 
 ## Goal
 
-Run a single IronClaw agent inside one SecretVM (Intel TDX confidential VM), using SecretInference (attestai.io) as its LLM backend, reachable via the web gateway over the SecretVM-provided HTTPS URL, with TDX attestation independently verifiable.
+Run a single IronClaw agent inside one SecretVM (Intel TDX confidential VM), using SecretAI (secretai-rytn.scrtlabs.com:21434) as its LLM backend, reachable via the web gateway over the SecretVM-provided HTTPS URL, with TDX attestation independently verifiable.
 
-Success looks like: a user navigates to `https://<adjective-animal>.vm.scrtlabs.com/`, authenticates with a bearer token, chats with IronClaw, and IronClaw routes every LLM call to SecretInference. Anyone can run `secretvm-cli vm attestation <vmId>` (or hit `:29343/cpu.html`) to confirm what image is actually running.
+Success looks like: a user navigates to `https://<adjective-animal>.vm.scrtlabs.com/`, authenticates with a bearer token, chats with IronClaw, and IronClaw routes every LLM call to SecretAI. Anyone can run `secretvm-cli vm attestation <vmId>` (or hit `:29343/cpu.html`) to confirm what image is actually running.
 
 Out of scope: Telegram/Slack/Signal channels, Docker-sandboxed workers (orchestrator/Docker-in-Docker), routines, MCP servers, OAuth/OIDC, semantic embeddings, heartbeat, multi-user, multi-VM, HA, custom domains.
 
@@ -24,8 +24,8 @@ Out of scope: Telegram/Slack/Signal channels, Docker-sandboxed workers (orchestr
                 │  SecretVM (Intel TDX, medium tier)           │
                 │                                              │
                 │   ┌────────────────────────────────────┐     │
-                │   │  ironclaw container               ─┼─→ SecretInference (also a TDX VM,
-                │   │   - Rust agent, axum gateway       │     attestai.io OpenAI-compatible)
+                │   │  ironclaw container               ─┼─→ SecretAI (also a TDX VM,
+                │   │   - Rust agent, axum gateway       │     OpenAI-compatible via Ollama)
                 │   │   - port 3000 (published)          │
                 │   │   - env: LLM_BACKEND=openai_compatible
                 │   └─────────┬──────────────────────────┘     │
@@ -43,9 +43,12 @@ Out of scope: Telegram/Slack/Signal channels, Docker-sandboxed workers (orchestr
                                ▼                          ▼
                    https://<vm>.vm.scrtlabs.com/   https://<vm>.vm.scrtlabs.com:29343/cpu.html
                    (web gateway, bearer-token auth) (attestation quote)
+
+       Egress (one destination): https://secretai-rytn.scrtlabs.com:21434/v1
+       (SecretAI, OpenAI-compatible via Ollama, also TEE-hosted)
 ```
 
-Two containers in one SecretVM. SecretVM provides the HTTPS URL and the attestation endpoint for free. PG state persists in a named volume that survives container restarts (whole-disk persistence via `secretvm-cli vm create -p`).
+Two containers in one SecretVM. SecretVM provides the HTTPS URL and the attestation endpoint for free. PG state persists in a named volume that survives container restarts (whole-disk persistence via `secretvm-cli vm create -p`). End-to-end confidentiality: agent runtime is in TDX, LLM inference is in TDX.
 
 ---
 
@@ -68,7 +71,7 @@ Two containers in one SecretVM. SecretVM provides the HTTPS URL and the attestat
 
 | Destination | Why | Required? |
 |---|---|---|
-| `https://attestai.io/...` (SecretInference) | Every LLM call | **Yes — load-bearing** |
+| `https://secretai-rytn.scrtlabs.com:21434/...` (SecretAI) | Every LLM call | **Yes — load-bearing** |
 | Docker Hub `nearaidev/ironclaw`, `pgvector/pgvector` | Image pulls at VM create / restart | **Yes — at deploy time only** |
 | Anything else | n/a | **No** — telemetry off, no MCP, no extensions, no tunnel, no NEAR AI, no OAuth |
 
@@ -79,7 +82,7 @@ Two containers in one SecretVM. SecretVM provides the HTTPS URL and the attestat
 | `DATABASE_URL` | env file uploaded with the VM | PG sibling, internal Docker DNS (`postgres:5432`). |
 | `POSTGRES_PASSWORD` | env file | Used by PG container init and DATABASE_URL. |
 | `SECRETS_MASTER_KEY` | env file | 32-byte base64 (`openssl rand -base64 32`). Wizard `KeySource::Env`. |
-| `LLM_API_KEY` | env file | SecretInference API key (x402-gated; see open questions). |
+| `LLM_API_KEY` | env file | SecretAI API key. Sent as `Authorization: Bearer <key>` — standard OpenAI-compatible auth, no x402. |
 | `GATEWAY_AUTH_TOKEN` | env file | Bearer token for the web UI. Generate with `openssl rand -hex 32`. |
 
 All five live in the env file that `secretvm-cli` uploads at create time. None of them are in the repo.
@@ -117,7 +120,9 @@ The interactive wizard is real, but upstream already supports a headless bypass:
 
 **No upstream changes needed.** Bootstrap is fully env-driven.
 
-### 2. LLM backend swap to OpenAI-compatible (SecretInference) — **ADAPT (env hygiene only)**
+### 2. LLM backend swap to OpenAI-compatible (SecretAI) — **ADAPT (env hygiene only)**
+
+SecretAI exposes an OpenAI-compatible surface via Ollama at `https://secretai-rytn.scrtlabs.com:21434`. Supported endpoints: `/v1/chat/completions` (with streaming), `/v1/completions`, `/v1/models`, tool/function calling on select models (e.g. `llama3.3:70b`). `/v1/responses` returns 404, and `/v1/embeddings` is still in progress — neither blocks the POC because IronClaw's `openai_compatible` backend uses `/v1/chat/completions` and we have embeddings disabled. Auth is standard `Authorization: Bearer <key>` — **no x402 handshake involved.**
 
 The `LLM_BACKEND=openai_compatible` path works directly via `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (`crates/ironclaw_llm/CLAUDE.md` and `.env.example`).
 
@@ -197,7 +202,7 @@ Conventions mirror SecretRelay (`reference/secretornot/docker-compose.yaml`): no
 
 ### Env file (`drafts/.env.example`)
 
-Headless-bootstrap env: `--no-onboard`, `SECRETS_MASTER_KEY` env mode, `LLM_BACKEND=openai_compatible` pointing at SecretInference, gateway bearer token, all optional features disabled (`SANDBOX_ENABLED=false`, `HEARTBEAT_ENABLED=false`, `EMBEDDING_ENABLED=false`, `TUNNEL_PROVIDER=none`, `CLI_ENABLED=false`).
+Headless-bootstrap env: `--no-onboard`, `SECRETS_MASTER_KEY` env mode, `LLM_BACKEND=openai_compatible` pointing at SecretAI (`https://secretai-rytn.scrtlabs.com:21434/v1`), `LLM_MODEL=llama3.3:70b` (tool-calling-capable), gateway bearer token, all optional features disabled (`SANDBOX_ENABLED=false`, `HEARTBEAT_ENABLED=false`, `EMBEDDING_ENABLED=false`, `TUNNEL_PROVIDER=none`, `CLI_ENABLED=false`).
 
 Real values stay out of git. The example file uses `CHANGE_ME` placeholders.
 
@@ -228,14 +233,13 @@ Real values stay out of git. The example file uses `CHANGE_ME` placeholders.
 
 ## Open questions
 
-These came up during planning and would need answers before a real deploy, but don't block the POC drafts.
+Most of the original open questions resolved once SecretAI was confirmed as the LLM backend. Remaining:
 
-1. **SecretInference model name and exact endpoint URL.** We have it in memory as a TEE-hosted, OpenAI-compatible endpoint at `https://attestai.io` and at `https://secretai-rytn.scrtlabs.com:21434` (from the SecretRelay env example). Which is the canonical one for the POC, and what model name(s) does it expose? (Affects `LLM_BASE_URL` and `LLM_MODEL` in the env.)
-2. **x402 gating on SecretInference.** The user noted SecretInference is x402-gated. IronClaw's OpenAI-compatible client sends `Authorization: Bearer <LLM_API_KEY>` — is that the x402 token, or does x402 require a different auth header / payment handshake? If it's a different flow, that's the one place we might need a small upstream patch or a sidecar proxy in the compose.
-3. **Exact image digest to pin.** The POC drafts use `nearaidev/ironclaw:0.28.1` as a tag-based placeholder. At deploy time we resolve to a digest via `docker manifest inspect nearaidev/ironclaw:0.28.1` and update both `drafts/docker-compose.yml` (which becomes the deployed compose) and any verification doc.
-4. **Whether to expose `/v1/chat/completions` publicly.** IronClaw's gateway includes an OpenAI-compatible proxy at `/v1/...`. With bearer auth it could be useful for testing, but it makes the agent indistinguishable from a plain proxy from the outside. Leave it on but document that the bearer token gates all `/v1/` traffic too.
-5. **Whether to use `IRONCLAW_IN_DOCKER=true` for the restart loop.** The `.env.example` notes this enables a Docker-aware exit-code-based restart. Compose `restart: unless-stopped` handles this externally already. Pick one. Default in our draft: leave it off; rely on compose restart policy.
-6. **Where to publish our own forked image, if we ever need one.** For the POC we use upstream's `nearaidev/ironclaw` directly. If we ever need to patch (e.g. for x402), we'd want a CI pipeline mirroring SecretRelay's GHCR + digest-rewrite flow.
+1. **Which SecretAI model to use.** The draft env pins `llama3.3:70b` (per prior project usage and known tool-calling support). Confirm this is the right choice — and whether SecretAI's tool-calling support on `llama3.3:70b` covers everything IronClaw expects (parallel tool calls, JSON mode if used, etc.). Fallbacks if needed: hit `/v1/models` on SecretAI to enumerate.
+2. **Exact image digest to pin.** The POC drafts use `nearaidev/ironclaw:0.28.1` as a tag-based placeholder. At deploy time we resolve to a digest via `docker manifest inspect nearaidev/ironclaw:0.28.1` and update `drafts/docker-compose.yml`.
+3. **Whether to expose `/v1/chat/completions` publicly.** IronClaw's gateway includes an OpenAI-compatible proxy at `/v1/...`. With bearer auth it could be useful for testing, but it makes the agent indistinguishable from a plain proxy from the outside. Leave it on; document that the bearer token gates all `/v1/` traffic too.
+4. **Whether to use `IRONCLAW_IN_DOCKER=true` for the restart loop.** The `.env.example` notes this enables a Docker-aware exit-code-based restart. Compose `restart: unless-stopped` handles this externally already. Default in our draft: leave it off; rely on compose restart policy.
+5. **Where to publish our own forked image, if we ever need one.** For the POC we use upstream's `nearaidev/ironclaw` directly. If patching becomes necessary later, mirror SecretRelay's GHCR + digest-rewrite CI flow.
 
 ---
 
@@ -245,18 +249,17 @@ Effort: S = under a day, M = 1–3 days, L = a week or more. Origin: **config** 
 
 | # | Task | Effort | Origin | Notes |
 |---|---|---|---|---|
-| 1 | Resolve SecretInference URL/model and confirm x402 auth header maps to `Authorization: Bearer` | S | config | Determines whether item 2 is needed. |
-| 2 | If x402 needs a non-Bearer flow: add a tiny `x402-proxy` sidecar to the compose (or upstream-patch the OpenAI-compatible client) | S–M | config or fork | Skip if Bearer works. |
-| 3 | Resolve a specific `nearaidev/ironclaw` image digest, update compose | S | config | One-shot deploy hygiene step. |
-| 4 | Real `.env` from `drafts/.env.example`: generate `SECRETS_MASTER_KEY`, `GATEWAY_AUTH_TOKEN`, `POSTGRES_PASSWORD`, set `LLM_API_KEY` | S | config | Keep this file out of git. |
-| 5 | `secretvm-cli vm create -n ironclaw-poc -t medium -d drafts/docker-compose.yml -e .env -p -s` | S | config | First create. `-p` for persistence, `-s` for TLS. |
-| 6 | Smoke test: `curl https://<vm>.vm.scrtlabs.com/api/health` returns 200 | S | config | First sanity check. |
-| 7 | Bearer-authenticated `curl` to `/api/chat/send`, verify LLM call routes to SecretInference (server logs on attestai.io side) | S | config | End-to-end golden path. |
-| 8 | Browser test with ModHeader (or equivalent): load web UI, log in with bearer, chat | S | config | Demo UX. |
-| 9 | Pull attestation: `curl https://<vm>.vm.scrtlabs.com:29343/cpu.html` + `:29343/self.html`. Confirm image digest in report matches deployed compose | S | config | The "attested" claim, validated. |
-| 10 | Document POC verification steps in `notes/03-verification-runbook.md` (deferred — not in scope for this round) | S | config | Followup. |
-| 11 | (If demoing) write a tiny `client_demo.py` that uses the OpenAI SDK against `https://<vm>.vm.scrtlabs.com/v1` with the bearer token | S | config | Followup. |
-| 12 | Decide on upgrade/redeploy flow: `secretvm-cli vm edit` vs new VM. Document | S | config | Followup. |
+| 1 | Confirm `LLM_MODEL=llama3.3:70b` (or pick alt) by hitting `https://secretai-rytn.scrtlabs.com:21434/v1/models` with the SecretAI key | S | config | Verifies tool-calling capability for the chosen model. |
+| 2 | Resolve a specific `nearaidev/ironclaw` image digest, update compose | S | config | One-shot deploy hygiene step. |
+| 3 | Real `.env` from `drafts/.env.example`: generate `SECRETS_MASTER_KEY`, `GATEWAY_AUTH_TOKEN`, `POSTGRES_PASSWORD`, set `LLM_API_KEY` | S | config | Keep this file out of git. |
+| 4 | `secretvm-cli vm create -n ironclaw-poc -t medium -d drafts/docker-compose.yml -e .env -p -s` | S | config | First create. `-p` for persistence, `-s` for TLS. |
+| 5 | Smoke test: `curl https://<vm>.vm.scrtlabs.com/api/health` returns 200 | S | config | First sanity check. |
+| 6 | Bearer-authenticated `curl` to `/api/chat/send`, verify LLM call routes to SecretAI (check container logs via `secretvm-cli vm logs`) | S | config | End-to-end golden path. |
+| 7 | Browser test with ModHeader (or equivalent): load web UI, log in with bearer, chat | S | config | Demo UX. |
+| 8 | Pull attestation: `curl https://<vm>.vm.scrtlabs.com:29343/cpu.html` + `:29343/self.html`. Confirm image digest in report matches deployed compose | S | config | The "attested" claim, validated. |
+| 9 | (If demoing) write a tiny `client_demo.py` that uses the OpenAI SDK against `https://<vm>.vm.scrtlabs.com/v1` with the bearer token | S | config | Followup. |
+| 10 | Document POC verification steps as a runbook in `notes/` | S | config | Followup. |
+| 11 | Decide on upgrade/redeploy flow: `secretvm-cli vm edit` vs new VM. Document | S | config | Followup. |
 
 The drafts in this repo (`drafts/docker-compose.yml`, `drafts/.env.example`) cover everything needed to attempt tasks 1–9.
 
@@ -264,7 +267,7 @@ The drafts in this repo (`drafts/docker-compose.yml`, `drafts/.env.example`) cov
 
 ## Next decision points
 
-1. **Approve / revise this plan.** Most of all, the gap analysis: do you agree nothing here needs an upstream patch? The biggest risk surface is x402 auth (item 2 above).
-2. **Resolve SecretInference connection params** (open question 1). Once these are real, we can write `drafts/.env.example` placeholder names but make sure the variable names match.
-3. **Pin an image digest.** Either I do it now from the local `docker manifest inspect`, or we wait until you're ready to create the VM.
-4. **Pick the demo path.** Bearer-via-browser-extension is cheapest. A reverse-proxy auth shim is more polished but adds complexity.
+1. **Approve / revise this plan.** Most of all, the gap analysis: do you agree nothing here needs an upstream patch?
+2. **Confirm the SecretAI model choice.** Draft uses `llama3.3:70b`. If you want a different model, easy swap in `.env`.
+3. **Pin an image digest.** Either I do it now from `docker manifest inspect nearaidev/ironclaw:0.28.1`, or we wait until you're ready to create the VM.
+4. **Pick the demo path.** Bearer-via-browser-extension is cheapest. A reverse-proxy auth shim is more polished but adds a third container.

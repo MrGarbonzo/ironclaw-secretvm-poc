@@ -2,7 +2,7 @@
 
 Deployment evaluation and POC artifacts for running [IronClaw](https://github.com/nearai/ironclaw) (NEAR AI's Rust personal-agent runtime) inside a [SecretVM](https://docs.scrt.network/secret-network-documentation/secret-vm) Intel TDX confidential VM.
 
-This work is for Secret Network Foundation. The goal is to demonstrate IronClaw running inside SecretVM and using [SecretInference](https://attestai.io) (TEE-hosted, OpenAI-compatible LLM endpoint) as its LLM backend, so the agent runtime and the inference are both attested.
+This work is for Secret Network Foundation. The goal is to demonstrate IronClaw running inside SecretVM and using [SecretAI](https://secretai-rytn.scrtlabs.com:21434) (TEE-hosted, OpenAI-compatible LLM endpoint backed by Ollama) as its LLM backend, so the agent runtime and the inference are both attested.
 
 ## Status
 
@@ -29,4 +29,4 @@ The upstream tree is **read-only**. All POC output lives in this repo.
 
 - Single VM, medium size tier (assumption).
 - Docker-compose deployment unit, attestation quote retrievable.
-- LLM backend: SecretInference (OpenAI-compatible, x402-gated).
+- LLM backend: SecretAI (OpenAI-compatible at `https://secretai-rytn.scrtlabs.com:21434`, standard Bearer auth).

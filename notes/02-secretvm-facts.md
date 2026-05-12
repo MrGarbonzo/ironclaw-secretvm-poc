@@ -50,4 +50,4 @@ In-VM attestation endpoint runs on the host alongside the VM:
 - No managed Postgres (so PG runs as a sibling container — confirmed by `secretvm-cli` workflow showing compose-as-deployment-unit).
 - No load balancer between VMs (single-VM deployment).
 - No native secret store (the secret env file is the only mechanism; we don't get a host-side vault).
-- No GPU on small/medium/large tiers in our case (LLM is remote via SecretInference).
+- No GPU on small/medium/large tiers in our case (LLM is remote via SecretAI).

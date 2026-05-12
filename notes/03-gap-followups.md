@@ -49,6 +49,6 @@ OAuth and OIDC are additive (opt-in env vars) — not setting them keeps the aut
 ## What we haven't verified end-to-end
 
 - That the running `nearaidev/ironclaw:0.28.1` image actually has the Telegram WASM embedded (i.e. the upstream CI build succeeds with `include_bytes!()`). We assume yes because that's the image they publish. If it doesn't, the binary won't start — easy to detect on the first `secretvm-cli vm logs`.
-- That `LLM_BACKEND=openai_compatible` against SecretInference's URL succeeds with bearer auth (the x402-gating question — open question 2 in the main plan).
+- That `LLM_BACKEND=openai_compatible` against SecretAI's URL succeeds end-to-end. Auth is confirmed standard `Authorization: Bearer <key>` (no x402), and the supported endpoints cover what IronClaw uses (`/v1/chat/completions`, `/v1/models`, tool-calling on `llama3.3:70b`). The only blind spot is whether tool-calling parallelism / JSON-mode behavior matches IronClaw's expectations — easy to confirm in the first end-to-end run.
 - That the SecretVM-injected Traefik labels correctly route the `https://<vm>.vm.scrtlabs.com/` to ironclaw:3000 and NOT to anything else (because postgres has no `ports:`, it shouldn't be ambiguous, but worth confirming on the first deploy).
 - That whole-disk persistence preserves the `pgdata` named volume across `secretvm-cli vm stop`/`start`. The user confirmed it does for the VM lifetime; should be fine for a POC.

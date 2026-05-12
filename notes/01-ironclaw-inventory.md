@@ -60,9 +60,9 @@ SECRETS_MASTER_KEY=...          # 32-byte key, base64 encoded (Env key source)
 ONBOARD_COMPLETED=true          # belt-and-suspenders alongside --no-onboard
 
 LLM_BACKEND=openai_compatible
-LLM_BASE_URL=https://attestai.io/v1   # SecretInference
+LLM_BASE_URL=https://secretai-rytn.scrtlabs.com:21434/v1   # SecretAI
 LLM_API_KEY=...
-LLM_MODEL=...                   # depends on what SecretInference exposes
+LLM_MODEL=llama3.3:70b          # SecretAI's tool-calling-capable model
 
 # Web gateway
 GATEWAY_ENABLED=true
@@ -81,7 +81,7 @@ TUNNEL_PROVIDER=none            # no ngrok/cloudflared/tailscale launching
 RUST_LOG=ironclaw=info
 ```
 
-This is essentially `deploy/env.example` with the LLM provider swapped from NEAR AI Cloud to SecretInference (an OpenAI-compatible endpoint).
+This is essentially `deploy/env.example` with the LLM provider swapped from NEAR AI Cloud to SecretAI (OpenAI-compatible via Ollama, standard Bearer auth).
 
 ### Secrets master key
 
@@ -95,7 +95,7 @@ Out-of-the-box network egress from the agent process:
 
 | Destination | Triggered by | POC handling |
 |---|---|---|
-| LLM provider endpoint (default NEAR AI) | Every LLM call | **Repoint to SecretInference**: `LLM_BACKEND=openai_compatible`, `LLM_BASE_URL=https://attestai.io/v1` |
+| LLM provider endpoint (default NEAR AI) | Every LLM call | **Repoint to SecretAI**: `LLM_BACKEND=openai_compatible`, `LLM_BASE_URL=https://secretai-rytn.scrtlabs.com:21434/v1` |
 | NEAR AI auth / session refresh | `LLM_BACKEND=nearai` only | Disabled (different backend) |
 | OAuth endpoints (Google/GitHub/Apple/NEAR) | `OAUTH_ENABLED=true` or user-initiated | Disabled |
 | `github.com/nearai/ironclaw/releases/latest/...` | Extension registry install | Don't install extensions |

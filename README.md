@@ -6,7 +6,9 @@ This work is for Secret Network Foundation. The goal is to demonstrate IronClaw 
 
 ## Status
 
-POC planning. No production code yet — drafts, notes, and a gap analysis only.
+**Live test deploy verified.** End-to-end chat through `https://purple-hare.vm.scrtlabs.com/` to SecretAI (`qwen2.5:72b`) is working on a SecretVM medium tier. See `notes/04-deploy-findings.md` for what we learned from the actual deploy.
+
+(Drafts in this repo have been updated to match what actually works on a SecretVM, not just what looks right on paper.)
 
 ## Upstream reference
 

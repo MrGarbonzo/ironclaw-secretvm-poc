@@ -1,7 +1,7 @@
 # IronClaw on SecretVM — POC Plan
 
 **Owner:** Secret Network Foundation
-**Status:** Planning / drafts only — no production code yet.
+**Status:** First live deploy verified end-to-end on `purple-hare.vm.scrtlabs.com` (SecretVM medium tier, qwen2.5:72b). See `notes/04-deploy-findings.md` for what came out of the real deploy.
 **Upstream read against:** IronClaw v0.28.1 (`C:\dev\ironclaw-main`, no git checkout — version from `Cargo.toml`).
 **Date:** 2026-05-11
 
@@ -233,13 +233,18 @@ Real values stay out of git. The example file uses `CHANGE_ME` placeholders.
 
 ## Open questions
 
-Most of the original open questions resolved once SecretAI was confirmed as the LLM backend. Remaining:
+Resolved by the live deploy:
 
-1. **Which SecretAI model to use.** The draft env pins `llama3.3:70b` (per prior project usage and known tool-calling support). Confirm this is the right choice — and whether SecretAI's tool-calling support on `llama3.3:70b` covers everything IronClaw expects (parallel tool calls, JSON mode if used, etc.). Fallbacks if needed: hit `/v1/models` on SecretAI to enumerate.
-2. **Exact image digest to pin.** The POC drafts use `nearaidev/ironclaw:0.28.1` as a tag-based placeholder. At deploy time we resolve to a digest via `docker manifest inspect nearaidev/ironclaw:0.28.1` and update `drafts/docker-compose.yml`.
-3. **Whether to expose `/v1/chat/completions` publicly.** IronClaw's gateway includes an OpenAI-compatible proxy at `/v1/...`. With bearer auth it could be useful for testing, but it makes the agent indistinguishable from a plain proxy from the outside. Leave it on; document that the bearer token gates all `/v1/` traffic too.
-4. **Whether to use `IRONCLAW_IN_DOCKER=true` for the restart loop.** The `.env.example` notes this enables a Docker-aware exit-code-based restart. Compose `restart: unless-stopped` handles this externally already. Default in our draft: leave it off; rely on compose restart policy.
-5. **Where to publish our own forked image, if we ever need one.** For the POC we use upstream's `nearaidev/ironclaw` directly. If patching becomes necessary later, mirror SecretRelay's GHCR + digest-rewrite CI flow.
+- ~~Which SecretAI model.~~ **`qwen2.5:72b`.** `llama3.3:70b` is not available on the SecretAI instance we used; the env example now defaults to qwen2.5:72b. Models on this SecretAI: qwen2.5:72b, qwen3:8b, deepseek-r1:70b, gemma3:4b, llama3.2-vision:latest.
+- ~~LLM_BASE_URL format.~~ Bare origin only (`https://secretai-rytn.scrtlabs.com:21434`) — IronClaw appends `/v1/...` itself.
+- ~~Traefik routing on SecretVM.~~ SecretVM injects labels on every service, including ones we don't want public. Workaround: set `traefik.enable=false` on postgres in the repo compose. Already done.
+
+Still open:
+
+1. **Exact image digest to pin.** The drafts use `nearaidev/ironclaw:0.28.1` as a tag-based placeholder. At deploy time we resolve to a digest via `docker manifest inspect nearaidev/ironclaw:0.28.1` and update `drafts/docker-compose.yml`. Live POC is currently on the tag; bumping to a digest is a clean follow-up.
+2. **Whether to expose `/v1/chat/completions` publicly.** IronClaw's gateway includes an OpenAI-compatible proxy at `/v1/...`. With bearer auth it's useful for testing (we used it for the end-to-end check), but it makes the agent indistinguishable from a plain proxy from the outside. Leave it on; the bearer token gates all `/v1/` traffic too.
+3. **`IRONCLAW_IN_DOCKER=true` restart loop.** Compose `restart: unless-stopped` handles restarts externally already. Default in our draft: leave it off.
+4. **Forked image publishing flow.** Not needed yet — using upstream `nearaidev/ironclaw` directly works. If patching becomes necessary, mirror SecretRelay's GHCR + digest-rewrite CI flow.
 
 ---
 

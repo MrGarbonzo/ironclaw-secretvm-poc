@@ -96,6 +96,11 @@ services:
       retries: 6
       start_period: 30s
     # No `ports:` block — postgres is reachable only via the docker network.
+    # SecretVM's compose rewriter injects Traefik labels on every service by
+    # default. Setting traefik.enable=false here tells Traefik to ignore
+    # postgres, avoiding a label collision with the ironclaw router.
+    labels:
+      - "traefik.enable=false"
 
 volumes:
   pgdata:

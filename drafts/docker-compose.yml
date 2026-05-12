@@ -1,0 +1,101 @@
+# IronClaw on SecretVM — minimal POC compose
+#
+# Modeled on the SecretRelay (secretornot) deployment shape:
+#   - Image pinned by digest (replace the placeholder below before deploying).
+#   - No Traefik labels here — SecretVM injects them on the VM side.
+#   - Env passthrough via `${VAR}` references; real values live in the
+#     `.env` file uploaded with `secretvm-cli vm create -e <env>` and are NOT
+#     in this repo.
+#
+# Deploy:
+#   secretvm-cli vm create \
+#     -n ironclaw-poc \
+#     -t medium \
+#     -d drafts/docker-compose.yml \
+#     -e .env \
+#     -p \
+#     -s
+#
+# After deploy:
+#   - Web gateway:  https://<vm>.vm.scrtlabs.com/
+#   - Health:       https://<vm>.vm.scrtlabs.com/api/health
+#   - Attestation:  https://<vm>.vm.scrtlabs.com:29343/cpu.html
+#                   https://<vm>.vm.scrtlabs.com:29343/self.html
+
+services:
+  ironclaw:
+    # TODO: pin to a specific digest before real deploy:
+    #   docker manifest inspect nearaidev/ironclaw:0.28.1 | jq -r '.manifests[0].digest'
+    # Then replace with: nearaidev/ironclaw@sha256:<digest>
+    image: nearaidev/ironclaw:0.28.1
+    restart: unless-stopped
+    # Mirrors deploy/ironclaw.service: skip the wizard, env-driven only.
+    command: ["--no-onboard"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      # Bootstrap — bypass the wizard entirely
+      ONBOARD_COMPLETED: "true"
+      DATABASE_BACKEND: "postgres"
+      DATABASE_URL: "postgres://ironclaw:${POSTGRES_PASSWORD}@postgres:5432/ironclaw"
+      DATABASE_POOL_SIZE: "10"
+      SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY}"
+
+      # LLM — SecretInference, OpenAI-compatible
+      LLM_BACKEND: "openai_compatible"
+      LLM_BASE_URL: "${LLM_BASE_URL}"
+      LLM_API_KEY: "${LLM_API_KEY}"
+      LLM_MODEL: "${LLM_MODEL}"
+      LLM_REQUEST_TIMEOUT_SECS: "180"
+
+      # Web gateway — bearer-token auth, the only public surface
+      GATEWAY_ENABLED: "true"
+      GATEWAY_HOST: "0.0.0.0"
+      GATEWAY_PORT: "3000"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+
+      # Everything optional is off
+      CLI_ENABLED: "false"
+      SANDBOX_ENABLED: "false"
+      HEARTBEAT_ENABLED: "false"
+      EMBEDDING_ENABLED: "false"
+      TUNNEL_PROVIDER: "none"
+
+      # Identity
+      AGENT_NAME: "${AGENT_NAME:-ironclaw}"
+
+      # Logs — info-level only. Do NOT raise to debug/trace in production:
+      # gateway log SSE stream and embedded prompts can surface user content.
+      RUST_LOG: "ironclaw=info"
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "ironclaw"
+      POSTGRES_USER: "ironclaw"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    # Modest tuning for the SecretVM medium tier (2 vCPU / 4 GB RAM).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "max_connections=20"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ironclaw -d ironclaw"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    # No `ports:` block — postgres is reachable only via the docker network.
+
+volumes:
+  pgdata:

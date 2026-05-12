@@ -1,0 +1,37 @@
+# Env files with real secrets (keep .env.example only)
+.env
+.env.local
+.env.*.local
+*.env
+!*.env.example
+
+# Build artifacts
+target/
+dist/
+build/
+node_modules/
+
+# Logs and runtime
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# Credentials and keys
+*.pem
+*.key
+!*.example.key
+id_rsa*
+secrets/
+credentials/
+
+# Docker volumes / local data
+data/
+postgres-data/
+pgdata/

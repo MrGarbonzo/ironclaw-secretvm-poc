@@ -1,27 +1,3 @@
-# IronClaw on SecretVM — minimal POC compose
-#
-# Modeled on the SecretRelay (secretornot) deployment shape:
-#   - Image pinned by digest (replace the placeholder below before deploying).
-#   - No Traefik labels here — SecretVM injects them on the VM side.
-#   - Env passthrough via `${VAR}` references; real values live in the
-#     `.env` file uploaded with `secretvm-cli vm create -e <env>` and are NOT
-#     in this repo.
-#
-# Deploy:
-#   secretvm-cli vm create \
-#     -n ironclaw-poc \
-#     -t medium \
-#     -d drafts/docker-compose.yml \
-#     -e .env \
-#     -p \
-#     -s
-#
-# After deploy:
-#   - Web gateway:  https://<vm>.vm.scrtlabs.com/
-#   - Health:       https://<vm>.vm.scrtlabs.com/api/health
-#   - Attestation:  https://<vm>.vm.scrtlabs.com:29343/cpu.html
-#                   https://<vm>.vm.scrtlabs.com:29343/self.html
-
 services:
   ironclaw:
     # TODO: pin to a specific digest before real deploy:

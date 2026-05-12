@@ -22,9 +22,10 @@ The upstream tree is **read-only**. All POC output lives in this repo.
 ## Layout
 
 - `SECRETVM_POC_PLAN.md` — the deliverable: architecture summary, component inventory, gap analysis, minimal POC config, open questions, sequenced task list.
+- `notes/05-what-we-changed.md` — **TL;DR for someone who just wants to know what's different from stock IronClaw.** Read this one first.
 - `reference/` — copies of SecretRelay deployment artifacts used as a SecretVM template.
 - `drafts/` — draft compose file and env example for the SecretVM deployment.
-- `notes/` — longer-form research notes (IronClaw architecture deep-dive, SecretVM specifics, etc.).
+- `notes/` — longer-form research notes (IronClaw architecture deep-dive, SecretVM specifics, live-deploy findings).
 - `patches/` — placeholder for any upstream IronClaw patches the plan calls for.
 
 ## SecretVM target

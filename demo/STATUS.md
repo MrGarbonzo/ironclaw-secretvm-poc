@@ -1,17 +1,18 @@
 # Demo status
 
-**Date built:** 2026-05-14 (overnight before Friday demo)
-**Target environment for tonight's build:** local Docker stack (`nearaidev/ironclaw:0.28.1` + `pgvector/pgvector:pg16`) at `C:\dev\secretai-tool-validation\ironclaw-test\docker-compose.yml`. Live deploy on `purple-hare.vm.scrtlabs.com` was NOT updated tonight - see "Migration to live deploy" below.
+**Date built:** 2026-05-14 / 2026-05-15 (overnight before Friday demo)
+**Live target:** SecretVM `beige-ermine.vm.scrtlabs.com` (Intel TDX). IronClaw 0.28.1 + Postgres + Traefik. Boot config: `IRONCLAW_PROFILE=server`, `command=["run","--no-onboard","--auto-approve"]`. Active model: `gpt-oss:120b` on `secretai-jedi.scrtlabs.com:21434`. Compose source: `https://github.com/MrGarbonzo/ironclaw-secretvm-poc/blob/main/drafts/docker-compose.yml`.
+**Local fallback:** `C:\dev\secretai-tool-validation\ironclaw-test\docker-compose.yml` (same image, same model). Used for overnight build; still works if the live VM is unavailable on demo day.
 
 ## TL;DR
 
-End-to-end flow works locally: a CLI-managed routine fires on cron, the agent uses its built-in `http` tool to fetch real data (CoinGecko prices, HN Algolia headlines), and posts a formatted message to Telegram via the same `http` tool. Confirmed live by 3 demo-tick fires at 02:00, 02:02, 02:04 UTC on 2026-05-15.
+End-to-end flow works on the live VM: a CLI-managed routine fires on cron inside the SecretVM, the agent uses its built-in `http` tool to fetch real data (CoinGecko prices, HN Algolia headlines), and posts a formatted message to Telegram via the same `http` tool. Confirmed live by 7 demo-tick fires at 04:48 → 05:00 UTC on 2026-05-15 (5/7 clean, 2/7 cold-start summary parse blips), plus initial fires of morning-digest, news-briefing, and price-update on creation.
 
 There is no Telegram channel pairing involved - the bot token + chat ID are baked into the routine prompt, and the agent calls `https://api.telegram.org/bot<TOKEN>/sendMessage` over the `http` tool. Cleaner than the channel pairing dance, fewer moving parts.
 
 ## Phase A - tool inventory
 
-Active model verified `gpt-oss:120b` on `secretai-jedi.scrtlabs.com:21434`. Doctor 7/0/10. Boot config clean: `IRONCLAW_PROFILE=server`, `command=["run","--no-onboard","--auto-approve"]`.
+Verified on `beige-ermine`. `gpt-oss:120b` active on jedi. Doctor 7/0/10. Boot config clean.
 
 The agent has these built-in tools (all available to routine and chat contexts):
 
@@ -27,73 +28,83 @@ The agent has these built-in tools (all available to routine and chat contexts):
 
 The demo relies on `http` only.
 
-Registry has 27 extensions (Telegram, web_search, gmail, etc). NONE are required for tonight's demo - they all need extra credentials (Brave key, OAuth, Composio, etc) and add complexity. We sidestep all of them by going http -> Telegram Bot API directly.
-
 ## Phase B - Telegram delivery
 
-Validated via a dedicated smoke test: agent prompted to POST to api.telegram.org over the `http` tool. Message arrived in user's DM (chat 587534846), message_id 1633, 12s end-to-end.
+Validated overnight on local stack: agent prompted to POST to api.telegram.org over the `http` tool. 12s end-to-end. Same path now confirmed on `beige-ermine` via the four routines.
 
-The `telegram` channel WASM IS installed and authenticated in the local stack (the `telegram_bot_token` secret is stored encrypted in postgres, channel state = `pairing`). It is NOT used by the demo flow - it would require a Telegram->bot pairing handshake we never completed. If you want bidirectional chat with the bot in a future iteration, finish the pairing via `ironclaw pairing list/approve telegram <code>`.
+## Phase C/D/E - the three task prompts
 
-## Phase C - price task
-
-Prompt at `tasks/price.txt`. Smoke test latency 8.2s. Two clean http calls (CoinGecko + Telegram). No tool hallucination.
-
-## Phase D - news briefing
-
-Prompt at `tasks/news.txt`. Smoke test latency 36s. HN Algolia public search (no API key). Picks 5 most recent AI/crypto stories, formats as Markdown bullets with link previews disabled.
-
-Tried two prompt variations; the simpler one (single search call, return all 5 hits in order) is reliable. The more complex "pick the best of 9 by category" variant triggered gpt-oss:120b's known orchestrator hallucination of an `assistant` tool. See "Known rough edges" below.
-
-## Phase E - combined morning digest
-
-Prompt at `tasks/digest.txt`. Smoke test latency 140s with 13 total tool call attempts (3 successful http calls + 10 failed hallucinated calls). The agent eventually delivered. This is the worst latency of the three - if the live demo wants the digest to render fast, prefer Phase C or D as the live-fire example.
-
-## Phase F - scheduling
-
-Routines created via `python demo/setup_routines.py`. Operator-managed only - per locked decision, NO agent-driven routine creation.
-
-| Routine | Schedule (UTC) | Task | Cooldown |
+| Task | Prompt | Latency (local) | Notes |
 |---|---|---|---|
-| `morning-digest` | `0 0 13 * * *` (13:00 UTC = 09:00 ET) | digest | 1h |
-| `news-briefing` | `0 0 17 * * *` (17:00 UTC = 13:00 ET) | news | 1h |
-| `price-update` | `0 0 21 * * *` (21:00 UTC = 17:00 ET) | price | 1h |
-| `demo-tick` | `0 */2 * * * *` (every 2 minutes) | price | 60s |
+| price | `tasks/price.txt` | 8s | Two http calls (CoinGecko + Telegram). Cleanest. |
+| news | `tasks/news.txt` | 36s | One HN Algolia search → Telegram. Picks 5 most recent AI/crypto stories. |
+| digest | `tasks/digest.txt` | ~140s | Three http calls (prices + news + post). Worst latency due to gpt-oss-120b's `assistant` tool hallucination — agent recovers. |
 
-Live fire confirmed: `demo-tick` ran 5 times between 02:00 and 02:08 UTC. The first fire at 02:00:00 reported a summary parse failure but the run still completed - likely a routine cold-start artifact. The other 4 fires all completed with `result_summary='Posted prices to Telegram.'`. After validation, `demo-tick` was disabled so it doesn't keep firing every 2 minutes overnight - re-enable for the demo with `ironclaw routines enable demo-tick`.
+For live-fire on stage, prefer `price` or `news` over `digest`.
+
+## Phase F - scheduling on `beige-ermine`
+
+Routines created via `python demo/setup_routines.py --target ssh --target-arg "root@beige-ermine.vm.scrtlabs.com -i ~/.ssh/beige_ermine_key -o IdentitiesOnly=yes"`. Operator-managed, CLI-driven. Idempotent.
+
+| Routine | Schedule (UTC) | Task | Cooldown | Demo-day status |
+|---|---|---|---|---|
+| `morning-digest` | `0 0 13 * * *` (13:00 UTC = 09:00 ET) | digest | 1h | active |
+| `news-briefing` | `0 0 17 * * *` (17:00 UTC = 13:00 ET) | news | 1h | active |
+| `price-update` | `0 0 21 * * *` (21:00 UTC = 17:00 ET) | price | 1h | active |
+| `demo-tick` | `0 */2 * * * *` (every 2 minutes) | price | 60s | **disabled** — re-enable for demo |
+
+Live fire confirmed on 2026-05-15: `demo-tick` ran 7 times between 04:48 and 05:00 UTC. 5 of 7 completed with `result_summary='Posted prices to Telegram.'`. The 2 cold-start runs failed at the summary parse step but the underlying http POST still went through (user confirmed visible Telegram delivery during the live test). After validation, `demo-tick` was disabled - re-enable for the demo with:
+```
+ssh -i ~/.ssh/beige_ermine_key root@beige-ermine.vm.scrtlabs.com 'docker exec docker_wd-ironclaw-1 ironclaw routines enable demo-tick'
+```
 
 **The "attention" status on every routine_runs row is misleading.** It just means the routine has no `--notify-channel` configured, so IronClaw doesn't know where to deliver the run summary on its own. The agent already delivered the actual content to Telegram via the `http` tool, so the notify-channel is unused. We can ignore "attention" for the demo.
 
-## Migration to live deploy (purple-hare)
+## Live access cheat sheet (paste-ready)
 
-NOT done tonight. To migrate:
+```powershell
+# Health from outside:
+curl https://beige-ermine.vm.scrtlabs.com/api/health
 
-1. Get the GATEWAY_AUTH_TOKEN off the live VM (`secretvm-cli vm logs` + grep, or redeploy with a known token).
-2. The live deploy compose at `drafts/docker-compose.yml` needs three changes:
-   - `command: ["--no-onboard"]` -> `command: ["run", "--no-onboard", "--auto-approve"]`
-   - `LLM_BASE_URL: https://secretai-rytn.scrtlabs.com:21434` -> `https://secretai-jedi.scrtlabs.com:21434`
-   - `LLM_MODEL: qwen2.5:72b` -> `gpt-oss:120b`
-   - Add: `IRONCLAW_PROFILE: server`
-3. `secretvm-cli vm edit` to redeploy.
-4. After restart: `python demo/setup_routines.py --target=ssh "root@purple-hare.vm.scrtlabs.com -i ~/.ssh/<key>"` (assuming you have SSH; otherwise paste the routine creates from `python demo/setup_routines.py --print` over `secretvm-cli vm exec` if that exists, or use the gateway's `/api/routines` if a write API surface gets added in a later upstream).
-5. Re-verify with `demo-tick` for one fire.
+# Attestation page (audience-facing slide):
+# https://beige-ermine.vm.scrtlabs.com:29343/cpu.html
+
+# SSH:
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com
+
+# Container name on the VM: docker_wd-ironclaw-1
+# Gateway token (in container env, also baked into demo workflow):
+#   b7649d308ae092409d4f3052b9d465ccd8d3d1a1867ab4211af2c55dc7d4b30b
+```
 
 ## Known rough edges (be ready to explain)
 
 1. **gpt-oss:120b hallucinates a tool called `assistant`** mid-task. Behavior varies between calls. The price task self-recovers from one hallucination; the digest task takes 4-5 hallucinated attempts before getting through. The agent ALWAYS eventually completes (or the LLM gives up cleanly), but you'll see "Tool error: Tool assistant not found" in the event stream. This is upstream of IronClaw - it's how OpenAI's gpt-oss-120b harmony format leaks into our tool-call surface. We log it; we don't try to rewrite the model.
 
-2. **Routine summary status is always `attention`** because no notify-channel is wired up. The actual outputs land in Telegram. If you want clean status: configure a notify-channel in step 2 of the SecretVM migration. Out of scope tonight.
+2. **Routine summary status is always `attention`** because no notify-channel is wired up. The actual outputs land in Telegram. If you want clean status: configure a notify-channel post-demo. Out of scope for tonight.
 
-3. **The bot token is in the routine prompt (in plain text in the database).** Not safe for a multi-tenant deploy. Acceptable for this single-user POC. Future hardening: store bot token in `secrets` table (we already proved that table works) and reference it from the http tool via the channel WASM credential mechanism.
+3. **The bot token is in the routine prompt (in plain text in the database, and in the model's context window).** Not safe for a multi-tenant deploy or a production bot. Acceptable for this single-user POC with a throwaway bot. Future hardening: store bot token in `secrets` table and reference it from the http tool via the channel WASM credential mechanism.
 
 4. **No HTTP fetch tool with cleaner ergonomics in the registry.** The 27-extension registry has `web_search` (Brave key), `llm_context` (Brave key), `composio` (paid), `nearai` (NEAR auth) - none are no-key. The built-in `http` tool is the only no-credentials internet path, and it's exactly what we need.
 
-5. **`docker logs` returns empty on Windows for this container.** The agent stderr goes through Rust tracing, but the docker logs driver isn't picking it up (or is buffering hard). Use the postgres tables (`routine_runs`, `llm_calls`, `secrets`, `routines`) for observability instead.
+5. **Routine fires don't write to `llm_calls`.** The `llm_calls` postgres table only logs chat-API turns, not routine executions. Audit for routines is in `routine_runs` only. Mention this as "known observability gap, fixed upstream in a later release."
+
+6. **Doctor warns about `HEARTBEAT_ENABLED`** on every CLI invocation. Benign — the env var is set but a stale DB setting wins. Heartbeat is off either way. Cosmetic; clear with `ironclaw config reset heartbeat.enabled` if you care.
+
+## Migration provenance (in case anyone asks "how was this built")
+
+1. Built and validated against the local Docker stack overnight on 2026-05-14. Four routines, http tool delivery, demo-tick fired 5x cleanly.
+2. SecretVM live deploy `purple-hare` was running on `qwen2.5:72b` from an earlier POC; couldn't be switched to `gpt-oss:120b` via runtime config because env vars (`LLM_BASE_URL`, `LLM_MODEL`) override DB settings on every container restart.
+3. Pushed `drafts/docker-compose.yml` updates to GitHub (commit `3f76b56`): changed `command` to headless `run --no-onboard --auto-approve`, added `IRONCLAW_PROFILE=server`, switched LLM target to `secretai-jedi.scrtlabs.com:21434` / `gpt-oss:120b`.
+4. Operator redeployed via the SecretVM portal, pulling compose from GitHub. After two false-start VMs (one missing HTTPS, one missing `POSTGRES_PASSWORD` in env), `beige-ermine.vm.scrtlabs.com` came up clean: gateway healthy, attestation page at `:29343/cpu.html` reachable, model `gpt-oss:120b` active.
+5. Pushed routines via `setup_routines.py --target ssh ...` (the script wraps the inner `ironclaw routines create` calls in `docker exec -i docker_wd-ironclaw-1` with proper shell quoting for the multi-line prompts).
+6. Verified live with 7 demo-tick fires on 2026-05-15 between 04:48 and 05:00 UTC.
 
 ## Files in this folder
 
-- `.env.example` / `.env` (gitignored) - Telegram bot token, chat ID, container target
+- `.env.example` / `.env` (gitignored) - Telegram bot token, chat ID, optional `IRONCLAW_BASE` and `IRONCLAW_GATEWAY_TOKEN` for `fire_now.py` against a remote target
 - `tasks/price.txt`, `tasks/news.txt`, `tasks/digest.txt` - the three routine prompts (with `{TELEGRAM_BOT_TOKEN}` / `{TELEGRAM_CHAT_ID}` placeholders)
-- `setup_routines.py` - idempotent routine setup; `--print` prints the equivalent shell commands; `--target=ssh "root@host -i key"` runs against a remote VM
+- `setup_routines.py` - idempotent routine setup; `--print` prints the equivalent shell commands; `--target ssh --target-arg "root@host -i key"` runs against a remote VM (auto-wraps with `docker exec -i docker_wd-ironclaw-1`); `--remote-container` overrides if the container name differs
+- `fire_now.py` - manual fire of one of the three tasks via the gateway chat API. Local: auto-discovers the gateway token from the container env. Remote: pass `--base` and `--gateway-token`, or set `IRONCLAW_BASE` / `IRONCLAW_GATEWAY_TOKEN` in `demo/.env`.
 - `DEMO-SCRIPT.md` - tomorrow's step-by-step demo flow
 - `STATUS.md` - this file

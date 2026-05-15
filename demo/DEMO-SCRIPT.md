@@ -2,26 +2,34 @@
 
 The story: an attestable AI agent (IronClaw, running in a TDX SecretVM, talking to SecretAI which is itself in a TDX enclave) is operating on a schedule. It fetches real-time data from the public internet and posts a curated summary to Telegram - all without a human in the loop.
 
+**Live target:** `https://beige-ermine.vm.scrtlabs.com/` (SecretVM, Intel TDX, container `docker_wd-ironclaw-1`)
+
 ## Pre-demo setup (do this 5 minutes before)
 
 1. Open your @Garbonzo_AI_Bot DM in Telegram. Have it visible on screen.
-2. Confirm the local stack is up:
+
+2. Confirm gateway is reachable from the outside:
    ```powershell
-   docker ps --format "table {{.Names}}\t{{.Status}}" | findstr ironclaw-test
+   curl https://beige-ermine.vm.scrtlabs.com/api/health
    ```
-   Both `ironclaw-test-ironclaw-1` and `ironclaw-test-postgres-1` should be `Up (healthy)`.
-3. Confirm routines are scheduled:
+   Expect `{"status":"healthy","channel":"gateway"}`.
+
+3. Confirm routines are scheduled (SSH in):
    ```powershell
-   docker exec ironclaw-test-ironclaw-1 ironclaw routines list --disabled
+   ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+       'docker exec docker_wd-ironclaw-1 ironclaw routines list --disabled'
    ```
-   You should see `morning-digest`, `news-briefing`, `price-update` (all `active`) and `demo-tick` (currently `disabled` to avoid overnight Telegram spam).
+   You should see `morning-digest`, `news-briefing`, `price-update` (all `active`/`attention`) and `demo-tick` (currently `disabled` to avoid pre-demo Telegram spam).
+
 4. **Re-enable `demo-tick` for the demo** so it fires every 2 minutes:
    ```powershell
-   docker exec ironclaw-test-ironclaw-1 ironclaw routines enable demo-tick
+   ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+       'docker exec docker_wd-ironclaw-1 ironclaw routines enable demo-tick'
    ```
-   Then disable it again after the demo:
+   Then disable it again immediately after the demo:
    ```powershell
-   docker exec ironclaw-test-ironclaw-1 ironclaw routines disable demo-tick
+   ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+       'docker exec docker_wd-ironclaw-1 ironclaw routines disable demo-tick'
    ```
 
 ## The demo (10-12 min)
@@ -33,9 +41,12 @@ The story: an attestable AI agent (IronClaw, running in a TDX SecretVM, talking 
 ### 2. Show the inventory (1 min)
 
 ```powershell
-docker exec ironclaw-test-ironclaw-1 ironclaw models status
-docker exec ironclaw-test-ironclaw-1 ironclaw doctor
-docker exec ironclaw-test-ironclaw-1 ironclaw routines list
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+    'docker exec docker_wd-ironclaw-1 ironclaw models status'
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+    'docker exec docker_wd-ironclaw-1 ironclaw doctor'
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+    'docker exec docker_wd-ironclaw-1 ironclaw routines list'
 ```
 
 Point to:
@@ -53,13 +64,17 @@ Open `demo/tasks/digest.txt`. Read the first paragraph aloud. Two points:
 
 Two options. Pick one.
 
-**Option A - wait for `demo-tick`.** It fires at every even minute. Worst case wait is 2 minutes. Tell the audience "the next fire is at HH:MM, watch the bot." Then point at the Telegram window.
+**Option A - wait for `demo-tick`.** It fires at every even minute (UTC). Worst case wait is 2 minutes. Tell the audience "the next fire is at HH:MM, watch the bot." Then point at the Telegram window.
 
 **Option B - fire one of the tasks immediately via the chat API.** From `C:\dev\ironclaw-secretvm-poc`:
 ```powershell
-python demo/fire_now.py price       # or: news, digest
+python demo/fire_now.py price `
+    --base https://beige-ermine.vm.scrtlabs.com `
+    --gateway-token b7649d308ae092409d4f3052b9d465ccd8d3d1a1867ab4211af2c55dc7d4b30b
 ```
-This drives the same agent + http tool path the routine uses, just kicked off by an HTTP POST instead of the cron timer. Same Telegram output. Validated tonight - works every time within 8-15s for `price`, ~36s for `news`, and ~2 min for `digest`.
+Same agent + http tool path the routine uses, just kicked off by an HTTP POST instead of the cron timer. Same Telegram output. Validated overnight - works every time within 8-15s for `price`, ~36s for `news`, and ~2 min for `digest`.
+
+(You can put `IRONCLAW_BASE=https://beige-ermine.vm.scrtlabs.com` and `IRONCLAW_GATEWAY_TOKEN=…` in `demo/.env` to skip the flags; `fire_now.py price` then works on its own.)
 
 When the message lands in Telegram:
 - "Real numbers from CoinGecko. Real Markdown formatting. The agent decided how to phrase it."
@@ -68,26 +83,32 @@ When the message lands in Telegram:
 ### 5. Show the audit trail (1 min)
 
 ```powershell
-docker exec ironclaw-test-ironclaw-1 ironclaw routines history demo-tick
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+    'docker exec docker_wd-ironclaw-1 ironclaw routines history demo-tick'
 ```
 
-Point to: STARTED column, DURATION (~15s), SUMMARY ("Posted prices to Telegram.").
+Point to: STARTED column, DURATION (~10-15s), SUMMARY ("Posted prices to Telegram.").
 
 If asked "what model did it use?" - peek at the LLM calls table:
 ```powershell
-docker exec ironclaw-test-postgres-1 psql -U ironclaw -d ironclaw -c "SELECT created_at, model, input_tokens, output_tokens FROM llm_calls ORDER BY created_at DESC LIMIT 3;"
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+    "docker exec docker_wd-postgres-1 psql -U ironclaw -d ironclaw -c 'SELECT created_at, model, input_tokens, output_tokens FROM llm_calls ORDER BY created_at DESC LIMIT 3;'"
 ```
 (Note: routine fires don't currently write to `llm_calls`, so this shows chat history only. Mention that as a known observability gap, not a bug.)
 
-### 6. Show attestation (1-2 min, optional but high-value)
+### 6. Show attestation (1-2 min — this is the punchline)
 
-Even though we built tonight against the local stack, the credible version is the SecretVM live deploy. If you have time, switch the slide / browser to:
+Switch the slide / browser to:
 ```
-https://purple-hare.vm.scrtlabs.com:29343/cpu.html
+https://beige-ermine.vm.scrtlabs.com:29343/cpu.html
 ```
 "This page is the attestation report from the TEE. The image digest you see is what's actually running. Anyone can verify it - we don't have to trust the operator."
 
-(If you didn't migrate to the live deploy tonight, skip this slide and lean on "the same stack runs in TDX in the SecretVM POC repo - this is the local development twin.")
+For maximum credibility, also show the compose source on GitHub:
+```
+https://github.com/MrGarbonzo/ironclaw-secretvm-poc/blob/main/drafts/docker-compose.yml
+```
+"This is the exact compose deployed. Nothing in this repo is a fork - we're running unmodified `nearaidev/ironclaw:0.28.1`. The TDX measurement covers this compose file; the compose pins the image."
 
 ### 7. The point (1 min)
 
@@ -102,7 +123,8 @@ https://purple-hare.vm.scrtlabs.com:29343/cpu.html
 
 To delete the demo-tick after:
 ```powershell
-docker exec ironclaw-test-ironclaw-1 ironclaw routines delete -y demo-tick
+ssh -i $HOME\.ssh\beige_ermine_key root@beige-ermine.vm.scrtlabs.com `
+    'docker exec docker_wd-ironclaw-1 ironclaw routines delete -y demo-tick'
 ```
 
 ## Known things to be ready to explain
@@ -114,10 +136,11 @@ See `STATUS.md` "Known rough edges". Most likely audience questions:
 - *"Why three separate routines plus a demo-tick?"* -> "Different cadence per content type. Morning digest is once a day; demo-tick is just for live demos."
 - *"How do you handle the bot token?"* -> "In this POC it's in the routine prompt. Production hardening would move it to the `secrets` table - we've already verified that path works for the Telegram channel WASM."
 - *"Why don't you use the Telegram channel directly?"* -> "Two reasons. (1) The channel needs a manual pairing handshake from the bot owner. (2) The http path is simpler and gets the same end result. We CAN finish the channel pairing if you want bidirectional chat with the agent later."
+- *"Can the model read the bot token?"* -> "Yes - the prompt is in the model's context window. That's why this token is throwaway. In a real deployment the token would be in the secrets table and the agent would call a credentials-aware HTTP wrapper instead."
 
 ## Stop conditions / abort plan
 
 If during the demo:
-- Routine fires but Telegram message doesn't arrive within 30s -> pivot to manual `python tests/smoke_price_task.py` from `C:\dev\secretai-tool-validation\` to show the same thing on demand.
-- Local stack is down -> bring up with `docker compose -f C:/dev/secretai-tool-validation/ironclaw-test/docker-compose.yml up -d`.
-- IronClaw is unhealthy -> `docker logs ironclaw-test-ironclaw-1` (likely empty due to known Windows quirk - go to postgres `routine_runs` table for last-known-good state).
+- Routine fires but Telegram message doesn't arrive within 30s -> pivot to manual `python demo/fire_now.py price --base https://beige-ermine.vm.scrtlabs.com --gateway-token <token>` to show the same thing on demand.
+- Live VM is unreachable -> fall back to the local stack at `C:\dev\secretai-tool-validation\ironclaw-test\docker-compose.yml`. `python demo/fire_now.py price` (no flags needed locally) gives the same output. Caveat: lose the attestation slide.
+- IronClaw on the VM is unhealthy -> SSH in, `docker logs --tail 80 docker_wd-ironclaw-1` and `docker exec docker_wd-postgres-1 psql -U ironclaw -d ironclaw -c "SELECT name, last_run, status FROM routines ORDER BY last_run DESC NULLS LAST LIMIT 5;"`.

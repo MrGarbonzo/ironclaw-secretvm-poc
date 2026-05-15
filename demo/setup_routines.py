@@ -86,23 +86,36 @@ ROUTINES = [
 ]
 
 
-def make_runner(target: str, target_arg: str | None):
+def make_runner(target: str, target_arg: str | None, remote_container: str):
     """Return a function (argv_list) -> CompletedProcess."""
     if target == "docker":
         prefix = ["docker", "exec", "-i", target_arg or "ironclaw-test-ironclaw-1"]
-    elif target == "ssh":
+
+        def run_docker(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
+            return subprocess.run(prefix + argv, capture_output=True, text=True, check=check)
+
+        return run_docker
+
+    if target == "ssh":
         if not target_arg:
             sys.exit("--target=ssh requires the SSH target string after it")
-        prefix = ["ssh"] + shlex.split(target_arg)
-    elif target == "secretvm":
+        ssh_prefix = ["ssh"] + shlex.split(target_arg)
+        # SSH joins everything after the host into a single shell command on
+        # the remote side, so we have to shell-quote each arg ourselves.
+        # Multi-line routine prompts contain newlines, quotes, JSON braces,
+        # and URL query strings — without quoting they get mangled.
+        def run_ssh(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
+            inner = ["docker", "exec", "-i", remote_container] + argv
+            remote_cmd = " ".join(shlex.quote(a) for a in inner)
+            return subprocess.run(
+                ssh_prefix + [remote_cmd], capture_output=True, text=True, check=check,
+            )
+
+        return run_ssh
+
+    if target == "secretvm":
         sys.exit("secretvm-cli does not support exec - use ssh or print")
-    else:
-        sys.exit(f"unknown target {target}")
-
-    def run(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run(prefix + argv, capture_output=True, text=True, check=check)
-
-    return run
+    sys.exit(f"unknown target {target}")
 
 
 def print_commands(env: dict[str, str]) -> None:
@@ -170,6 +183,8 @@ def main() -> None:
                         help="docker exec (local) or ssh (live VM).")
     parser.add_argument("--target-arg",
                         help="docker container name OR ssh target+flags (e.g. 'root@host -i key').")
+    parser.add_argument("--remote-container", default="docker_wd-ironclaw-1",
+                        help="On a SecretVM, the ironclaw container name (default: docker_wd-ironclaw-1).")
     args = parser.parse_args()
 
     env = load_env()
@@ -179,7 +194,7 @@ def main() -> None:
         return
 
     target_arg = args.target_arg or env.get("IRONCLAW_DOCKER_CONTAINER", "ironclaw-test-ironclaw-1")
-    runner = make_runner(args.target, target_arg)
+    runner = make_runner(args.target, target_arg, args.remote_container)
     apply(runner, env)
 
 

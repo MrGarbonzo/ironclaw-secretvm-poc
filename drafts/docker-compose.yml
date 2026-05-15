@@ -5,16 +5,19 @@ services:
     # Then replace with: nearaidev/ironclaw@sha256:<digest>
     image: nearaidev/ironclaw:0.28.1
     restart: unless-stopped
-    # Mirrors deploy/ironclaw.service: skip the wizard, env-driven only.
-    command: ["--no-onboard"]
+    # Headless server: skip wizard, auto-approve standard tool calls (http etc).
+    # Required for routines to fire without an interactive approver attached.
+    command: ["run", "--no-onboard", "--auto-approve"]
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "3000:3000"
     environment:
-      # Bootstrap — bypass the wizard entirely
+      # Bootstrap — bypass the wizard entirely. server profile keeps the agent
+      # running headless instead of dropping into the interactive REPL.
       ONBOARD_COMPLETED: "true"
+      IRONCLAW_PROFILE: "server"
       DATABASE_BACKEND: "postgres"
       DATABASE_URL: "postgres://ironclaw:${POSTGRES_PASSWORD}@postgres:5432/ironclaw"
       DATABASE_POOL_SIZE: "10"

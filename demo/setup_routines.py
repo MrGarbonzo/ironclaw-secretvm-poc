@@ -44,6 +44,13 @@ def load_env() -> dict[str, str]:
 
 
 def read_prompt(task_name: str, env: dict[str, str]) -> str:
+    # The agent calls http to api.telegram.org directly — bot token + chat
+    # id are substituted into the prompt at routine-create time. The routine
+    # framework just records the run; delivery is the agent's responsibility.
+    # Tried Pattern B (notify_channel=telegram, framework delivers via the
+    # channel WASM) but gpt-oss:120b's hallucinated tool calls land runs in
+    # `attention` status, which made framework delivery unreliable or
+    # decorated every message with a "🔔 ROUTINE: attention" wrapper.
     raw = (TASKS_DIR / f"{task_name}.txt").read_text(encoding="utf-8")
     return raw.replace("{TELEGRAM_BOT_TOKEN}", env["TELEGRAM_BOT_TOKEN"]).replace(
         "{TELEGRAM_CHAT_ID}", env["TELEGRAM_CHAT_ID"]
@@ -86,10 +93,15 @@ ROUTINES = [
 ]
 
 
-def make_runner(target: str, target_arg: str | None, remote_container: str):
-    """Return a function (argv_list) -> CompletedProcess."""
+def make_runner(target: str, target_arg: str | None, container: str):
+    """Return a function (argv_list) -> CompletedProcess.
+
+    Caller picks which container to target by passing it here (e.g. the
+    ironclaw container for `ironclaw routines …`, or the postgres container
+    for `psql …`).
+    """
     if target == "docker":
-        prefix = ["docker", "exec", "-i", target_arg or "ironclaw-test-ironclaw-1"]
+        prefix = ["docker", "exec", "-i", container]
 
         def run_docker(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
             return subprocess.run(prefix + argv, capture_output=True, text=True, check=check)
@@ -105,7 +117,7 @@ def make_runner(target: str, target_arg: str | None, remote_container: str):
         # Multi-line routine prompts contain newlines, quotes, JSON braces,
         # and URL query strings — without quoting they get mangled.
         def run_ssh(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
-            inner = ["docker", "exec", "-i", remote_container] + argv
+            inner = ["docker", "exec", "-i", container] + argv
             remote_cmd = " ".join(shlex.quote(a) for a in inner)
             return subprocess.run(
                 ssh_prefix + [remote_cmd], capture_output=True, text=True, check=check,
@@ -138,16 +150,26 @@ def print_commands(env: dict[str, str]) -> None:
             f" --prompt {shlex.quote(prompt)}"
         )
         print(cmd)
+        # On a target with the Telegram channel WASM activated, the routine
+        # framework would otherwise broadcast attention/failure alerts to
+        # Telegram. We don't want those — the agent's http POST is the
+        # delivery path. Suppress framework notifications.
+        sql = (
+            "UPDATE routines SET notify_on_failure=false, notify_on_attention=false "
+            f"WHERE name='{r['name']}';"
+        )
+        print(f"# (run on the VM host:)")
+        print(f"docker exec docker_wd-postgres-1 psql -U ironclaw -d ironclaw -c {shlex.quote(sql)}")
         print()
 
 
-def apply(runner, env: dict[str, str]) -> None:
+def apply(runner, env: dict[str, str], pg_runner) -> None:
     for r in ROUTINES:
         prompt = read_prompt(r["task"], env)
         print(f"\n=== {r['name']} (schedule='{r['schedule']}', tz='{r['timezone']}') ===")
         # delete-if-exists, ignore failures
         runner(["ironclaw", "routines", "delete", "-y", r["name"]], check=False)
-        # create
+        # create — no --notify-channel; agent's http POST is the delivery
         result = runner(
             [
                 "ironclaw", "routines", "create",
@@ -169,6 +191,19 @@ def apply(runner, env: dict[str, str]) -> None:
         for line in result.stdout.splitlines():
             if line.startswith("Created routine") or line.startswith("  "):
                 print(line)
+        # Suppress framework attention/failure broadcasts. With the Telegram
+        # channel WASM activated on the VM, leaving these on would double up
+        # the agent's clean http delivery with a "🔔 ROUTINE: attention"
+        # wrapper for every gpt-oss hallucinated-tool-call run.
+        sql = (
+            "UPDATE routines SET notify_on_failure=false, notify_on_attention=false "
+            f"WHERE name='{r['name']}';"
+        )
+        pg_result = pg_runner(["psql", "-U", "ironclaw", "-d", "ironclaw", "-c", sql], check=False)
+        if pg_result.returncode != 0:
+            print(f"  WARN: framework-notify suppression SQL failed: {pg_result.stderr[:200]}")
+        else:
+            print(f"  framework notifications: failure=off, attention=off")
 
     print("\n=== All routines ===")
     listed = runner(["ironclaw", "routines", "list"], check=False)
@@ -185,6 +220,8 @@ def main() -> None:
                         help="docker container name OR ssh target+flags (e.g. 'root@host -i key').")
     parser.add_argument("--remote-container", default="docker_wd-ironclaw-1",
                         help="On a SecretVM, the ironclaw container name (default: docker_wd-ironclaw-1).")
+    parser.add_argument("--remote-postgres", default="docker_wd-postgres-1",
+                        help="On a SecretVM, the postgres container name (default: docker_wd-postgres-1).")
     args = parser.parse_args()
 
     env = load_env()
@@ -195,7 +232,12 @@ def main() -> None:
 
     target_arg = args.target_arg or env.get("IRONCLAW_DOCKER_CONTAINER", "ironclaw-test-ironclaw-1")
     runner = make_runner(args.target, target_arg, args.remote_container)
-    apply(runner, env)
+    # For the Pattern B notify_user / notify_on_success patch we also need
+    # a runner pointed at the postgres container.
+    local_pg = env.get("IRONCLAW_POSTGRES_CONTAINER", "ironclaw-test-postgres-1")
+    pg_container = args.remote_postgres if args.target == "ssh" else local_pg
+    pg_runner = make_runner(args.target, target_arg, pg_container)
+    apply(runner, env, pg_runner)
 
 
 if __name__ == "__main__":
